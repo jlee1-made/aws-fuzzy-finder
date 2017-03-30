@@ -1,8 +1,11 @@
+import os
+import socket
 import subprocess
 import click
 import shelve
 import time
 
+from . import aws_utils
 from .aws_utils import (
     get_aws_instances,
     prepare_searchable_instances
@@ -23,6 +26,57 @@ from .settings import (
 )
 
 
+def find_free_local_port():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(('', 0))
+    addr = s.getsockname()
+    s.close()
+    port = addr[1]
+    return port
+
+
+def psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql):
+    # This just ignores most arguments because I haven't bothered to find out
+    # what they are
+    rds_instances = aws_utils.fetch_rds_instances()
+    searchable_instances = aws_utils.prepare_rds_searchable_instances(
+        rds_instances)
+
+    fuzzysearch_bash_command = 'echo -e "{}" | {}'.format(
+        "\n".join(searchable_instances),
+        LIBRARY_PATH
+    )
+    name, host = choice_ex(fuzzysearch_bash_command)
+    host = host.rstrip()
+    rds_instance = aws_utils.find_rds_instance(rds_instances, name)
+    username = rds_instance['MasterUsername']
+    db_name = rds_instance['DBName']
+    db_port = rds_instance['Endpoint']['Port']
+
+    vpc_groups = aws_utils.get_rds_security_groups(rds_instance)
+    connections = aws_utils.fetch_connections(security_groups=vpc_groups)
+    boto_instance_data = get_aws_instances()
+    candidate_reservations = boto_instance_data['Reservations']
+    # just pick first EC2 host we find
+    reservation = next(
+        aws_utils.find_jump_host(connections, candidate_reservations))
+    searchable_instances = prepare_searchable_instances(
+        [reservation],
+        use_private_ip or ENV_USE_PRIVATE_IP,
+        ENV_USE_PUBLIC_DNS_OVER_IP
+    )
+    [instance] = searchable_instances
+    instance_name, instance_host = instance.split(SEPARATOR)
+    instance_host = instance_host.rstrip()
+
+    local_port = find_free_local_port()
+    remote_host = host
+    remote_port = db_port
+    jump_host = instance_host
+    command = ['aws-fuzzy-finder-forward-and-run', str(local_port), remote_host, str(remote_port), jump_host, 'psql', '-h', 'localhost', '-p', str(local_port), '-W', '-U', username, db_name]
+    os.execvp(command[0], command)
+
+
 @click.command()
 @click.option('--private', 'use_private_ip', flag_value=True, help="Use private IP's")
 @click.option('--key-path', default='~/.ssh/id_rsa', help="Path to your private key, default: ~/.ssh/id_rsa")
@@ -32,7 +86,10 @@ from .settings import (
 @click.option('--tunnel/--no-tunnel', help="Tunnel to another machine")
 @click.option('--tunnel-key-path', default='~/.ssh/id_rsa', help="Path to your private key, default: ~/.ssh/id_rsa")
 @click.option('--tunnel-user', default='ec2-user', help="User to SSH with, default: ec2-user")
-def entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user):
+@click.option('--psql', flag_value=True, help="psql to host")
+def entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql):
+    if psql:
+        return psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql)
 
     try:
         with shelve.open(CACHE_PATH) as cache:
@@ -78,7 +135,7 @@ def entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel
     subprocess.call(ssh_command, shell=True, executable='/bin/bash')
 
 
-def choice(fuzzysearch_bash_command):
+def choice_ex(fuzzysearch_bash_command):
     try:
         choice = subprocess.check_output(
             fuzzysearch_bash_command,
@@ -88,7 +145,13 @@ def choice(fuzzysearch_bash_command):
     except subprocess.CalledProcessError:
         exit(1)
 
-    return choice.split(SEPARATOR)[1].rstrip()
+    return choice.split(SEPARATOR)
+
+
+def choice(fuzzysearch_bash_command):
+    choice = choice_ex(fuzzysearch_bash_command)
+    return choice[1].rstrip()
+
 
 if __name__ == '__main__':
     entrypoint()

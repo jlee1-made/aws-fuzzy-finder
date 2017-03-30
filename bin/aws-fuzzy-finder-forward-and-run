@@ -1,0 +1,29 @@
+#!/bin/bash
+
+set -e
+
+echo_to_err() {
+    echo "$@" 1>&2;
+}
+
+run() {
+    echo_to_err "$@"
+    "$@"
+}
+
+local_port="$1" && shift
+remote_host="$1" && shift
+remote_port="$1" && shift
+jump_host="$1" && shift
+
+# You have to type the password within $sleep_time seconds, because if ssh
+# doesn't see anything using the connection within that time, it will exit.
+
+# An alternative would be to use -N, but then this script would be responsible
+# for trapping exit and killing ssh, which perhaps might result in stale ssh
+# processes left behind -- and this time limit seems reasonable.
+
+sleep_time=120
+run ssh -T -f -L "$local_port":"$remote_host":"$remote_port" "$jump_host" sleep "$sleep_time"
+echo $!
+run "$@"

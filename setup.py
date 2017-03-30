@@ -23,5 +23,6 @@ setup(
         console_scripts=[
             'aws-fuzzy = aws_fuzzy_finder.main:entrypoint',
         ]
-    )
+    ),
+    scripts=["bin/aws-fuzzy-finder-forward-and-run"]
 )

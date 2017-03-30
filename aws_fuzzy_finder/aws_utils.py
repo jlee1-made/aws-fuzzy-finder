@@ -56,7 +56,7 @@ def get_aws_instances():
         exit(1)
 
 
-def prepare_searchable_instances(reservations, use_private_ip, use_public_dns_over_ip):
+def prepare_searchable_instances(reservations, use_private_ip, use_public_dns_over_ip=False):
     instance_data = gather_instance_data(reservations)
     searchable_instances = []
     for instance in instance_data:
@@ -73,3 +73,63 @@ def prepare_searchable_instances(reservations, use_private_ip, use_public_dns_ov
             ip
         ))
     return searchable_instances
+
+
+def get_rds_security_groups(rds_instance):
+    groups = rds_instance.get('VpcSecurityGroups', [])
+    return list(
+        filter(lambda id_: id_ is not None,
+               (group.get('VpcSecurityGroupId', None) for group in groups)))
+
+
+def fetch_connections(security_groups):
+    # Note these are VPC security groups, not DB ones
+    connections = []
+    ec2 = boto3.resource('ec2')
+    for group in security_groups:
+        sg = ec2.SecurityGroup(group)
+        connections.extend(sg.ip_permissions)
+    return connections
+
+
+def get_groups_from_connections(connections):
+    for connection in connections:
+        for pair in connection.get('UserIdGroupPairs', []):
+            yield pair.get('GroupId')
+
+
+def find_jump_host(connections, reservations):
+    groups = frozenset(get_groups_from_connections(connections))
+    for reservation in reservations:
+        for instance in reservation.get('Instances', []):
+            for group in instance.get('SecurityGroups', []):
+                if group.get('GroupId') in groups:
+                    yield reservation
+
+
+def fetch_rds_instances():
+    rds = boto3.client('rds')
+    return rds.describe_db_instances()['DBInstances']
+
+
+def prepare_rds_searchable_instances(rds_instances):
+    searchable_instances = []
+    for instance in rds_instances:
+        name = instance.get('DBInstanceIdentifier')
+        host = instance.get('Endpoint', {}).get('Address')
+        if not name or not host:
+            continue
+
+        searchable_instances.append("{}{}{}".format(
+            name,
+            SEPARATOR,
+            host
+        ))
+    return searchable_instances
+
+
+def find_rds_instance(rds_instances, name):
+    for instance in rds_instances:
+        if instance.get('DBInstanceIdentifier') == name:
+            return instance
+    assert False, (rds_instances, name)
