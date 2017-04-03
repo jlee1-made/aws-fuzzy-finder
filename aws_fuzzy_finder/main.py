@@ -50,8 +50,8 @@ def psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, t
     host = host.rstrip()
     rds_instance = aws_utils.find_rds_instance(rds_instances, name)
     username = rds_instance['MasterUsername']
-    db_name = rds_instance['DBName']
-    db_port = rds_instance['Endpoint']['Port']
+    db_name = rds_instance.get('DBName', 'template1')
+    db_port = rds_instance['Endpoint'].get('Port', 5432)
 
     vpc_groups = aws_utils.get_rds_security_groups(rds_instance)
     connections = aws_utils.fetch_connections(security_groups=vpc_groups)
