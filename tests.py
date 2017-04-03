@@ -1,9 +1,4 @@
-import datetime
-
 from aws_fuzzy_finder import aws_utils
-
-
-ZERO = datetime.timedelta(0)
 
 
 class TestInstanceView:
@@ -70,18 +65,6 @@ class TestInstanceView:
             'prod_something @ 10.121.12.34',
             'prod_something2 @ 52.123.12.32',
         ]
-
-
-class tzutc(datetime.tzinfo):
-
-    def utcoffset(self, dt):
-        return ZERO
-
-    def tzname(self, dt):
-        return "UTC"
-
-    def dst(self, dt):
-        return ZERO
 
 
 class TestRds:
