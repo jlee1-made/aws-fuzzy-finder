@@ -14,6 +14,27 @@ from .settings import (
 )
 
 
+def get_aws_account_name_from_boto3_config():
+    client = boto3.client("sts")
+    return client.get_caller_identity()["Account"]
+
+
+def get_aws_region_from_boto3_config():
+    my_session = boto3.session.Session()
+    return my_session.region_name
+
+
+def list_rds_tags(db_instance_identifier):
+    account_id = get_aws_account_name_from_boto3_config()
+    region = get_aws_region_from_boto3_config()
+    arn = "arn:aws:rds:%s:%s:db:%s" % (
+        region, account_id, db_instance_identifier
+    )
+    rds = boto3.client('rds')
+    response = rds.list_tags_for_resource(ResourceName=arn)
+    return dict((d['Key'], d['Value']) for d in response['TagList'])
+
+
 def gather_instance_data(reservations):
     instances = []
 

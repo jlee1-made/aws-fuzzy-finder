@@ -10,6 +10,7 @@ import time
 from . import aws_utils
 from .aws_utils import (
     get_aws_instances,
+    list_rds_tags,
     prepare_searchable_instances
 )
 from .settings import (
@@ -63,7 +64,17 @@ def psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, t
     host = host.rstrip()
     rds_instance = aws_utils.find_rds_instance(rds_instances, name)
     username = rds_instance['MasterUsername']
-    db_name = rds_instance.get('DBName', 'template1')
+
+    db_name = rds_instance.get('DBName')
+    if db_name is None:
+        rds_identifier = rds_instance.get('DBInstanceIdentifier')
+        tags = list_rds_tags(rds_identifier)
+        # RDS tag name DefaultDBNameHint is only standard in that this script
+        # uses it :-)  Sadly it's not possible to set the DBName metadata, so
+        # this method is provided as an alternative means of providing a hint
+        # as to the database name to connect to.
+        db_name = tags.get('DefaultDBNameHint', 'template1')
+
     db_port = rds_instance['Endpoint'].get('Port', 5432)
 
     vpc_groups = aws_utils.get_rds_security_groups(rds_instance)
