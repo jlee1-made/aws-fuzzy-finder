@@ -1,8 +1,10 @@
+import logging
 import os
 import socket
 import subprocess
 import click
 import shelve
+import sys
 import time
 
 from . import aws_utils
@@ -24,6 +26,17 @@ from .settings import (
     CACHE_EXPIRY_TIME,
     CACHE_ENABLED
 )
+
+
+logger = logging.getLogger()
+
+
+def configure_dev_logging():
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(logging.INFO)
+    root.addHandler(handler)
 
 
 def find_free_local_port():
@@ -55,7 +68,7 @@ def psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, t
 
     vpc_groups = aws_utils.get_rds_security_groups(rds_instance)
     connections = aws_utils.fetch_connections(security_groups=vpc_groups)
-    boto_instance_data = get_aws_instances()
+    boto_instance_data = get_boto_instance_data(no_cache)
     candidate_reservations = boto_instance_data['Reservations']
     # just pick first EC2 host we find
     reservation = next(
@@ -77,6 +90,27 @@ def psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, t
     os.execvp(command[0], command)
 
 
+def get_boto_instance_data(no_cache):
+    try:
+        with shelve.open(CACHE_PATH) as cache:
+            data = cache.get('fuzzy_finder_data')
+            if CACHE_ENABLED and data and data.get('expiry') >= time.time() and not no_cache:
+                logger.info('EC2 instance data: Cache HIT')
+                boto_instance_data = data['aws_instances']
+            else:
+                logger.info('EC2 instance data: Cache MISS')
+                boto_instance_data = get_aws_instances()
+                if CACHE_ENABLED:
+                    cache['fuzzy_finder_data'] = {
+                        'aws_instances': boto_instance_data,
+                        'expiry': time.time() + CACHE_EXPIRY_TIME
+                    }
+    except:
+        logger.info('EC2 instance data: Cache MISS')
+        boto_instance_data = get_aws_instances()
+    return boto_instance_data
+
+
 @click.command()
 @click.option('--private', 'use_private_ip', flag_value=True, help="Use private IP's")
 @click.option('--key-path', default='~/.ssh/id_rsa', help="Path to your private key, default: ~/.ssh/id_rsa")
@@ -87,24 +121,15 @@ def psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, t
 @click.option('--tunnel-key-path', default='~/.ssh/id_rsa', help="Path to your private key, default: ~/.ssh/id_rsa")
 @click.option('--tunnel-user', default='ec2-user', help="User to SSH with, default: ec2-user")
 @click.option('--psql', flag_value=True, help="psql to host")
-def entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql):
+@click.option('--log', flag_value=True, help="Enable logging output to stdout")
+def entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql, log):
+    if log:
+        configure_dev_logging()
+
     if psql:
         return psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql)
 
-    try:
-        with shelve.open(CACHE_PATH) as cache:
-            data = cache.get('fuzzy_finder_data')
-            if CACHE_ENABLED and data and data.get('expiry') >= time.time() and not no_cache:
-                boto_instance_data = data['aws_instances']
-            else:
-                boto_instance_data = get_aws_instances()
-                if CACHE_ENABLED:
-                    cache['fuzzy_finder_data'] = {
-                        'aws_instances': boto_instance_data,
-                        'expiry': time.time() + CACHE_EXPIRY_TIME
-                    }
-    except:
-        boto_instance_data = get_aws_instances()
+    boto_instance_data = get_boto_instance_data(no_cache)
 
     searchable_instances = prepare_searchable_instances(
         boto_instance_data['Reservations'],
