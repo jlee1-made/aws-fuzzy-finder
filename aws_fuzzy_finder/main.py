@@ -1,3 +1,4 @@
+import functools
 import logging
 import os
 import socket
@@ -10,7 +11,6 @@ import time
 from . import aws_utils
 from .aws_utils import (
     get_aws_instances,
-    list_rds_tags,
     prepare_searchable_instances
 )
 from .settings import (
@@ -52,7 +52,7 @@ def find_free_local_port():
 def psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql):
     # This just ignores most arguments because I haven't bothered to find out
     # what they are
-    rds_instances = aws_utils.fetch_rds_instances()
+    rds_instances = fetch_rds_instances(no_cache=no_cache)
     searchable_instances = aws_utils.prepare_rds_searchable_instances(
         rds_instances)
 
@@ -78,8 +78,8 @@ def psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, t
     db_port = rds_instance['Endpoint'].get('Port', 5432)
 
     vpc_groups = aws_utils.get_rds_security_groups(rds_instance)
-    connections = aws_utils.fetch_connections(security_groups=vpc_groups)
-    boto_instance_data = get_boto_instance_data(no_cache)
+    connections = fetch_connections(security_groups=vpc_groups)
+    boto_instance_data = get_boto_instance_data(no_cache=no_cache)
     candidate_reservations = boto_instance_data['Reservations']
     # just pick first EC2 host we find
     reservation = next(
@@ -101,25 +101,56 @@ def psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, t
     os.execvp(command[0], command)
 
 
-def get_boto_instance_data(no_cache):
-    try:
-        with shelve.open(CACHE_PATH) as cache:
-            data = cache.get('fuzzy_finder_data')
-            if CACHE_ENABLED and data and data.get('expiry') >= time.time() and not no_cache:
-                logger.info('EC2 instance data: Cache HIT')
-                boto_instance_data = data['aws_instances']
-            else:
-                logger.info('EC2 instance data: Cache MISS')
-                boto_instance_data = get_aws_instances()
-                if CACHE_ENABLED:
-                    cache['fuzzy_finder_data'] = {
-                        'aws_instances': boto_instance_data,
-                        'expiry': time.time() + CACHE_EXPIRY_TIME
-                    }
-    except:
-        logger.info('EC2 instance data: Cache MISS')
-        boto_instance_data = get_aws_instances()
-    return boto_instance_data
+def persistent_memoize(cache_prefix):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapped(*args, no_cache=False, **kwargs):
+            cache_key_parts = []
+            cache_key_parts.extend(map(str, args))
+            cache_key_parts.extend(['{}={}'.format(k, v) for k, v in kwargs.items()])
+            cache_key = '-'.join(cache_key_parts)
+            try:
+                with shelve.open(CACHE_PATH) as cache:
+                    data = cache.get(cache_prefix)
+                    if CACHE_ENABLED and data and data.get('expiry') >= time.time() and not no_cache:
+                        logger.info('{}: Cache HIT'.format(cache_prefix))
+                        value = data[cache_key]
+                    else:
+                        logger.info('{}: Cache MISS'.format(cache_prefix))
+                        value = func(*args, **kwargs)
+                        if CACHE_ENABLED:
+                            logger.info('{}: Cache FILL'.format(cache_prefix))
+                            cache[cache_prefix] = {
+                                cache_key: value,
+                                'expiry': time.time() + CACHE_EXPIRY_TIME
+                            }
+            except:
+                logger.exception('Failed to read cache')
+                logger.info('{}: Cache MISS'.format(cache_prefix))
+                value = func(*args, **kwargs)
+            return value
+        return wrapped
+    return decorator
+
+
+@persistent_memoize(cache_prefix='aws_instances')
+def get_boto_instance_data():
+    return get_aws_instances()
+
+
+@persistent_memoize(cache_prefix='rds_instances')
+def fetch_rds_instances():
+    return aws_utils.fetch_rds_instances()
+
+
+@persistent_memoize(cache_prefix='rds_tags')
+def list_rds_tags(rds_identifier):
+    return aws_utils.list_rds_tags(rds_identifier)
+
+
+@persistent_memoize(cache_prefix='connections')
+def fetch_connections(security_groups):
+    return aws_utils.fetch_connections(security_groups)
 
 
 @click.command()
