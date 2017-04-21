@@ -171,7 +171,7 @@ def entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel
     if psql:
         return psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql)
 
-    boto_instance_data = get_boto_instance_data(no_cache)
+    boto_instance_data = get_boto_instance_data(no_cache=no_cache)
 
     searchable_instances = prepare_searchable_instances(
         boto_instance_data['Reservations'],
