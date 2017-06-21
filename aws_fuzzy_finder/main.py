@@ -109,18 +109,20 @@ def persistent_memoize(cache_prefix):
             cache_key_parts.extend(map(str, args))
             cache_key_parts.extend(['{}={}'.format(k, v) for k, v in kwargs.items()])
             cache_key = '-'.join(cache_key_parts)
+            aws_profile = os.environ.get('AWS_DEFAULT_PROFILE')
+            full_cache_prefix = aws_profile + '_' + cache_prefix
             try:
                 with shelve.open(CACHE_PATH) as cache:
-                    data = cache.get(cache_prefix)
+                    data = cache.get(full_cache_prefix)
                     if CACHE_ENABLED and data and data.get('expiry') >= time.time() and not no_cache:
-                        logger.info('{}: Cache HIT'.format(cache_prefix))
+                        logger.info('{}: Cache HIT'.format(full_cache_prefix))
                         value = data[cache_key]
                     else:
-                        logger.info('{}: Cache MISS'.format(cache_prefix))
+                        logger.info('{}: Cache MISS'.format(full_cache_prefix))
                         value = func(*args, **kwargs)
                         if CACHE_ENABLED:
-                            logger.info('{}: Cache FILL'.format(cache_prefix))
-                            cache[cache_prefix] = {
+                            logger.info('{}: Cache FILL'.format(full_cache_prefix))
+                            cache[full_cache_prefix] = {
                                 cache_key: value,
                                 'expiry': time.time() + CACHE_EXPIRY_TIME
                             }
