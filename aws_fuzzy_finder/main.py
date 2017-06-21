@@ -102,6 +102,11 @@ def psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, t
     os.execvp(command[0], command)
 
 
+class Missing:
+
+    pass
+
+
 def persistent_memoize(cache_prefix):
     def decorator(func):
         @functools.wraps(func)
@@ -115,9 +120,11 @@ def persistent_memoize(cache_prefix):
             try:
                 with shelve.open(CACHE_PATH) as cache:
                     data = cache.get(full_cache_prefix)
+                    value = Missing
                     if CACHE_ENABLED and data and data.get('expiry') >= time.time() and not no_cache:
+                        value = data.get(cache_key, Missing)
+                    if value is not Missing:
                         logger.info('{}: Cache HIT'.format(full_cache_prefix))
-                        value = data[cache_key]
                     else:
                         logger.info('{}: Cache MISS'.format(full_cache_prefix))
                         value = func(*args, **kwargs)
