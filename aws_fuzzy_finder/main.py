@@ -49,7 +49,7 @@ def find_free_local_port():
     return port
 
 
-def psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql):
+def psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql, db_name):
     # This just ignores most arguments because I haven't bothered to find out
     # what they are
     rds_instances = fetch_rds_instances(no_cache=no_cache)
@@ -65,15 +65,16 @@ def psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, t
     rds_instance = aws_utils.find_rds_instance(rds_instances, name)
     username = rds_instance['MasterUsername']
 
-    db_name = rds_instance.get('DBName')
     if db_name is None:
-        rds_identifier = rds_instance.get('DBInstanceIdentifier')
-        tags = list_rds_tags(rds_identifier)
-        # RDS tag name DefaultDBNameHint is only standard in that this script
-        # uses it :-)  Sadly it's not possible to set the DBName metadata, so
-        # this method is provided as an alternative means of providing a hint
-        # as to the database name to connect to.
-        db_name = tags.get('DefaultDBNameHint', 'template1')
+        db_name = rds_instance.get('DBName')
+        if db_name is None:
+            rds_identifier = rds_instance.get('DBInstanceIdentifier')
+            tags = list_rds_tags(rds_identifier)
+            # RDS tag name DefaultDBNameHint is only standard in that this
+            # script uses it :-) Sadly it's not possible to set the DBName
+            # metadata, so this method is provided as an alternative means of
+            # providing a hint as to the database name to connect to.
+            db_name = tags.get('DefaultDBNameHint', 'template1')
 
     db_port = rds_instance['Endpoint'].get('Port', 5432)
 
@@ -165,13 +166,14 @@ def fetch_connections(security_groups):
 @click.option('--tunnel-key-path', default='~/.ssh/id_rsa', help="Path to your private key, default: ~/.ssh/id_rsa")
 @click.option('--tunnel-user', default='ec2-user', help="User to SSH with, default: ec2-user")
 @click.option('--psql', flag_value=True, help="psql to host")
+@click.option('--db-name')
 @click.option('--log', flag_value=True, help="Enable logging output to stdout")
-def entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql, log):
+def entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql, log, db_name):
     if log:
         configure_dev_logging()
 
     if psql:
-        return psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql)
+        return psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql, db_name)
 
     boto_instance_data = get_boto_instance_data(no_cache=no_cache)
 
