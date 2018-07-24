@@ -96,11 +96,36 @@ def prepare_searchable_instances(reservations, use_private_ip, use_public_dns_ov
     return searchable_instances
 
 
+def find_nomad_host(reservations, use_private_ip, use_public_dns_over_ip=False):
+    instance_data = gather_instance_data(reservations)
+    for instance in instance_data:
+        name = get_tag_value('Name', instance['tags'])
+        if 'nomad' not in name:
+            continue
+
+        if use_public_dns_over_ip:
+            ip = instance['public_dns']
+        elif use_private_ip:
+            ip = instance['private_ip']
+        else:
+            ip = instance['public_ip'] or instance['private_ip']
+        return ip
+    else:
+        raise Exception(reservations)
+
+
 def get_rds_security_groups(rds_instance):
     groups = rds_instance.get('VpcSecurityGroups', [])
     return list(
         filter(lambda id_: id_ is not None,
                (group.get('VpcSecurityGroupId', None) for group in groups)))
+
+
+def get_redis_security_groups(rds_instance):
+    groups = rds_instance.get('SecurityGroups', [])
+    return list(
+        filter(lambda id_: id_ is not None,
+               (group.get('SecurityGroupId', None) for group in groups)))
 
 
 def fetch_connections(security_groups):
@@ -131,6 +156,39 @@ def find_jump_host(connections, reservations):
 def fetch_rds_instances():
     rds = boto3.client('rds')
     return rds.describe_db_instances()['DBInstances']
+
+
+def fetch_redis_clusters():
+    elasticache = boto3.client('elasticache')
+    return elasticache.describe_cache_clusters(ShowCacheNodeInfo=True)['CacheClusters']
+    return clusters
+
+
+def prepare_redis_searchable_endpoints(redis_clusters):
+    searchable = []
+    for cluster in redis_clusters:
+        first_node = cluster['CacheNodes'][0]
+        name = cluster['CacheClusterId']
+        endpoint = first_node.get('Endpoint', {})
+        host = endpoint.get('Address')
+        port = endpoint.get('Port', 6379)
+        hostport = '{host}:{port}'.format(host=host, port=port)
+        if not host:
+            continue
+
+        searchable.append("{}{}{}".format(
+            name,
+            SEPARATOR,
+            hostport
+        ))
+    return searchable
+
+
+def find_redis_endpoint(redis_endpoints, name):
+    for endpoint in redis_endpoints:
+        if endpoint.get('CacheClusterId') == name:
+            return endpoint
+    assert False, (redis_endpoints, name)
 
 
 def prepare_rds_searchable_instances(rds_instances):

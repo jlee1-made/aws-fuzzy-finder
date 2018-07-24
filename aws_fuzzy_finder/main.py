@@ -49,6 +49,58 @@ def find_free_local_port():
     return port
 
 
+def redis_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user):
+    # This just ignores most arguments because I haven't bothered to find out
+    # what they are
+    redis_clusters = fetch_redis_clusters(no_cache=no_cache)
+    searchable_endpoints = aws_utils.prepare_redis_searchable_endpoints(redis_clusters)
+
+    fuzzysearch_bash_command = 'echo -e "{}" | {}'.format(
+        "\n".join(searchable_endpoints),
+        LIBRARY_PATH
+    )
+    name, hostport = choice_ex(fuzzysearch_bash_command)
+    hostport = hostport.rstrip()
+    host, sep, port = hostport.partition(":")
+    assert host, host
+    assert port, port
+    endpoint = aws_utils.find_redis_endpoint(redis_clusters, name)
+
+    # The security groups for the instances don't allow finding a jump host in
+    # the same way as for postgres...
+    # vpc_groups = aws_utils.get_redis_security_groups(endpoint)
+    # connections = fetch_connections(security_groups=vpc_groups)
+    # boto_instance_data = get_boto_instance_data(no_cache=no_cache)
+    # candidate_reservations = boto_instance_data['Reservations']
+    # # just pick first EC2 host we find
+    # reservation = next(
+    #     aws_utils.find_jump_host(connections, candidate_reservations))
+    # searchable_instances = prepare_searchable_instances(
+    #     [reservation],
+    #     use_private_ip or ENV_USE_PRIVATE_IP,
+    #     ENV_USE_PUBLIC_DNS_OVER_IP
+    # )
+    # [instance] = searchable_instances
+    # instance_name, instance_host = instance.split(SEPARATOR)
+    # instance_host = instance_host.rstrip()
+
+    # ...so just find a random nomad host to use as the jump host
+    ec2_instances = get_boto_instance_data(no_cache=no_cache)
+    candidate_reservations = ec2_instances['Reservations']
+    instance_host = aws_utils.find_nomad_host(
+        candidate_reservations,
+        use_private_ip or ENV_USE_PRIVATE_IP,
+        ENV_USE_PUBLIC_DNS_OVER_IP
+    )
+
+    local_port = find_free_local_port()
+    remote_host = host
+    remote_port = port
+    jump_host = instance_host
+    command = ['aws-fuzzy-finder-forward-and-run', str(local_port), remote_host, str(remote_port), jump_host, 'redis-cli', '-h', 'localhost', '-p', str(local_port)]
+    os.execvp(command[0], command)
+
+
 def psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql, db_name):
     # This just ignores most arguments because I haven't bothered to find out
     # what they are
@@ -153,6 +205,11 @@ def fetch_rds_instances():
     return aws_utils.fetch_rds_instances()
 
 
+@persistent_memoize(cache_prefix='rds_instances')
+def fetch_redis_clusters():
+    return aws_utils.fetch_redis_clusters()
+
+
 @persistent_memoize(cache_prefix='rds_tags')
 def list_rds_tags(rds_identifier):
     return aws_utils.list_rds_tags(rds_identifier)
@@ -173,14 +230,18 @@ def fetch_connections(security_groups):
 @click.option('--tunnel-key-path', default='~/.ssh/id_rsa', help="Path to your private key, default: ~/.ssh/id_rsa")
 @click.option('--tunnel-user', default='ec2-user', help="User to SSH with, default: ec2-user")
 @click.option('--psql', flag_value=True, help="psql to host")
+@click.option('--redis', flag_value=True, help="psql to host")
 @click.option('--db-name')
 @click.option('--log', flag_value=True, help="Enable logging output to stdout")
-def entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql, log, db_name):
+def entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql, log, db_name, redis):
     if log:
         configure_dev_logging()
 
     if psql:
         return psql_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user, psql, db_name)
+
+    if redis:
+        return redis_entrypoint(use_private_ip, key_path, user, ip_only, no_cache, tunnel, tunnel_key_path, tunnel_user)
 
     boto_instance_data = get_boto_instance_data(no_cache=no_cache)
 
